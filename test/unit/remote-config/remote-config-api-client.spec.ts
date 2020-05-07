@@ -30,6 +30,7 @@ import * as utils from '../utils';
 import * as mocks from '../../resources/mocks';
 import { FirebaseAppError } from '../../../src/utils/error';
 import { FirebaseApp } from '../../../src/firebase-app';
+import { deepCopy } from '../../../src/utils/deep-copy';
 
 const expect = chai.expect;
 
@@ -135,12 +136,8 @@ describe('RemoteConfigApiClient', () => {
         .should.eventually.be.rejectedWith(noProjectId);
     });
 
-    ['', 'abc', 'a123b', 'a123', '123a', 1.2, '70.2', null, NaN, true, [], {}].forEach((invalidVersion) => {
-      it(`should reject if the versionNumber is: ${invalidVersion}`, () => {
-        expect(() => apiClient.getTemplate(invalidVersion as any))
-          .to.throw(/^versionNumber must be (a non-empty string in int64 format or a number|an integer or a string in int64 format)$/);
-      });
-    });
+    // test for version number validations
+    runTemplateVersionNumberTests((v: string | number) => { apiClient.getTemplate(v); });
 
     it('should resolve with the latest template on success', () => {
       const stub = sinon
@@ -240,6 +237,9 @@ describe('RemoteConfigApiClient', () => {
         .should.eventually.be.rejectedWith(noProjectId);
     });
 
+    // tests for input template validations
+    testInvalidInputTemplates((t: RemoteConfigTemplate) => { apiClient.validateTemplate(t); });
+
     it('should resolve with the requested template on success', () => {
       const stub = sinon
         .stub(HttpClient.prototype, 'send')
@@ -266,6 +266,7 @@ describe('RemoteConfigApiClient', () => {
         });
     });
 
+    // tests for API response template
     it('should reject when the etag is not present', () => {
       const stub = sinon
         .stub(HttpClient.prototype, 'send')
@@ -340,12 +341,15 @@ describe('RemoteConfigApiClient', () => {
         .should.eventually.be.rejectedWith(noProjectId);
     });
 
+    // tests for input template validations
+    testInvalidInputTemplates((t: RemoteConfigTemplate) => { apiClient.publishTemplate(t); });
+
     const testOptions = [
       { options: undefined, etag: 'etag-123456789012-6' },
       { options: { force: true }, etag: '*' }
     ];
     testOptions.forEach((option) => {
-      it('should resolve with the requested template on success', () => {
+      it('should resolve with the published template on success', () => {
         const stub = sinon
           .stub(HttpClient.prototype, 'send')
           .resolves(utils.responseFrom(TEST_RESPONSE, 200, { etag: 'etag-123456789012-6' }));
@@ -370,6 +374,7 @@ describe('RemoteConfigApiClient', () => {
       });
     });
 
+    // tests for API response template
     it('should reject when the etag is not present', () => {
       const stub = sinon
         .stub(HttpClient.prototype, 'send')
@@ -437,4 +442,141 @@ describe('RemoteConfigApiClient', () => {
       });
     });
   });
+
+  describe('rollback', () => {
+    it(`should reject when project id is not available`, () => {
+      return clientWithoutProjectId.rollback('60')
+        .should.eventually.be.rejectedWith(noProjectId);
+    });
+
+    // test for version number validations
+    runTemplateVersionNumberTests((v: string | number) => { apiClient.rollback(v); });
+
+    it('should resolve with the rollbacked template on success', () => {
+      const stub = sinon
+        .stub(HttpClient.prototype, 'send')
+        .resolves(utils.responseFrom(TEST_RESPONSE, 200, { etag: 'etag-123456789012-60' }));
+      stubs.push(stub);
+      return apiClient.rollback('60')
+        .then((resp) => {
+          expect(resp.conditions).to.deep.equal(TEST_RESPONSE.conditions);
+          expect(resp.parameters).to.deep.equal(TEST_RESPONSE.parameters);
+          expect(resp.parameterGroups).to.deep.equal(TEST_RESPONSE.parameterGroups);
+          expect(resp.etag).to.equal('etag-123456789012-60');
+          expect(stub).to.have.been.calledOnce.and.calledWith({
+            method: 'POST',
+            url: 'https://firebaseremoteconfig.googleapis.com/v1/projects/test-project/remoteConfig:rollback',
+            headers: EXPECTED_HEADERS,
+            data: {
+              versionNumber: '60',
+            }
+          });
+        });
+    });
+
+    it('should reject when the etag is not present in the response', () => {
+      const stub = sinon
+        .stub(HttpClient.prototype, 'send')
+        .resolves(utils.responseFrom(TEST_RESPONSE));
+      stubs.push(stub);
+      const expected = new FirebaseRemoteConfigError('invalid-argument', 'ETag header is not present in the server response.');
+      return apiClient.rollback(60)
+        .should.eventually.be.rejected.and.deep.equal(expected);
+    });
+
+    it('should reject when a full platform error response is received', () => {
+      const stub = sinon
+        .stub(HttpClient.prototype, 'send')
+        .rejects(utils.errorFrom(ERROR_RESPONSE, 404));
+      stubs.push(stub);
+      const expected = new FirebaseRemoteConfigError('not-found', 'Requested entity not found');
+      return apiClient.rollback(60)
+        .should.eventually.be.rejected.and.deep.equal(expected);
+    });
+
+    it('should reject with unknown-error when error code is not present', () => {
+      const stub = sinon
+        .stub(HttpClient.prototype, 'send')
+        .rejects(utils.errorFrom({}, 404));
+      stubs.push(stub);
+      const expected = new FirebaseRemoteConfigError('unknown-error', 'Unknown server error: {}');
+      return apiClient.rollback(60)
+        .should.eventually.be.rejected.and.deep.equal(expected);
+    });
+
+    it('should reject with unknown-error for non-json response', () => {
+      const stub = sinon
+        .stub(HttpClient.prototype, 'send')
+        .rejects(utils.errorFrom('not json', 404));
+      stubs.push(stub);
+      const expected = new FirebaseRemoteConfigError(
+        'unknown-error', 'Unexpected response with status: 404 and body: not json');
+      return apiClient.rollback(60)
+        .should.eventually.be.rejected.and.deep.equal(expected);
+    });
+  });
+
+  function runTemplateVersionNumberTests(rcOperation: Function): void {
+    ['', 'abc', 'a123b', 'a123', '123a', 1.2, '70.2', null, NaN, true, [], {}].forEach((invalidVersion) => {
+      it(`should reject if the versionNumber is: ${invalidVersion}`, () => {
+        expect(() => rcOperation(invalidVersion as any))
+          .to.throw(/^versionNumber must be (a non-empty string in int64 format or a number|an integer or a string in int64 format)$/);
+      });
+    });
+  }
+
+  function testInvalidInputTemplates(rcOperation: Function): void {
+    const INVALID_PARAMETERS: any[] = [null, '', 'abc', 1, true, []];
+    const INVALID_PARAMETER_GROUPS: any[] = [null, '', 'abc', 1, true, []];
+    const INVALID_CONDITIONS: any[] = [null, '', 'abc', 1, true, {}];
+    const INVALID_ETAG_TEMPLATES: any[] = [
+      { parameters: {}, parameterGroups: {}, conditions: [], etag: '' },
+      Object()
+    ];
+    const INVALID_TEMPLATES: any[] = [null, 'abc', 123];
+    const inputTemplate = deepCopy(REMOTE_CONFIG_TEMPLATE);
+
+    INVALID_PARAMETERS.forEach((invalidParameter) => {
+      it(`should throw if the parameters is ${JSON.stringify(invalidParameter)}`, () => {
+        (inputTemplate as any).parameters = invalidParameter;
+        inputTemplate.conditions = [];
+        expect(() => rcOperation(inputTemplate))
+          .to.throw('Remote Config parameters must be a non-null object');
+      });
+    });
+
+    INVALID_PARAMETER_GROUPS.forEach((invalidParameterGroup) => {
+      it(`should throw if the parameter groups is ${JSON.stringify(invalidParameterGroup)}`, () => {
+        (inputTemplate as any).parameterGroups = invalidParameterGroup;
+        inputTemplate.conditions = [];
+        inputTemplate.parameters = {};
+        expect(() => rcOperation(inputTemplate))
+          .to.throw('Remote Config parameter groups must be a non-null object');
+      });
+    });
+
+    INVALID_CONDITIONS.forEach((invalidConditions) => {
+      it(`should throw if the conditions is ${JSON.stringify(invalidConditions)}`, () => {
+        (inputTemplate as any).conditions = invalidConditions;
+        inputTemplate.parameters = {};
+        inputTemplate.parameterGroups = {};
+        expect(() => rcOperation(inputTemplate))
+          .to.throw('Remote Config conditions must be an array');
+      });
+    });
+
+    INVALID_ETAG_TEMPLATES.forEach((invalidEtagTemplate) => {
+      it(`should throw if the template is ${JSON.stringify(invalidEtagTemplate)}`, () => {
+        expect(() => rcOperation(invalidEtagTemplate))
+          .to.throw('ETag must be a non-empty string.');
+      });
+    });
+
+    INVALID_TEMPLATES.forEach((invalidTemplate) => {
+      it(`should throw if the template is ${JSON.stringify(invalidTemplate)}`, () => {
+        expect(() => rcOperation(invalidTemplate))
+          .to.throw(`Invalid Remote Config template: ${JSON.stringify(invalidTemplate)}`);
+      });
+    });
+  }
 });

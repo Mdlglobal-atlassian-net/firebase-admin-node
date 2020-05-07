@@ -324,11 +324,6 @@ describe('RemoteConfig', () => {
   const INVALID_PARAMETERS: any[] = [null, '', 'abc', 1, true, []];
   const INVALID_PARAMETER_GROUPS: any[] = [null, '', 'abc', 1, true, []];
   const INVALID_CONDITIONS: any[] = [null, '', 'abc', 1, true, {}];
-  const INVALID_ETAG_TEMPLATES: any[] = [
-    { parameters: {}, parameterGroups: {}, conditions: [], etag: '' },
-    Object()
-  ];
-  const INVALID_TEMPLATES: any[] = [null, 'abc', 123];
 
   describe('validateTemplate', () => {
     it('should propagate API errors', () => {
@@ -442,9 +437,6 @@ describe('RemoteConfig', () => {
           expect(template.parameterGroups).deep.equals({});
         });
     });
-
-    // validate input template
-    testInvalidInputTemplates((t: RemoteConfigTemplate) => { remoteConfig.validateTemplate(t); });
 
     it('should resolve with Remote Config template on success', () => {
       const stub = sinon
@@ -596,9 +588,6 @@ describe('RemoteConfig', () => {
         });
     });
 
-    // validate input template
-    testInvalidInputTemplates((t: RemoteConfigTemplate) => { remoteConfig.publishTemplate(t); });
-
     it('should resolve with Remote Config template on success', () => {
       const stub = sinon
         .stub(RemoteConfigApiClient.prototype, 'publishTemplate')
@@ -725,49 +714,157 @@ describe('RemoteConfig', () => {
     });
   });
 
-  function testInvalidInputTemplates(rcOperation: Function): void {
-    const inputTemplate = deepCopy(REMOTE_CONFIG_TEMPLATE);
-    INVALID_PARAMETERS.forEach((invalidParameter) => {
-      it(`should throw if the parameters is ${JSON.stringify(invalidParameter)}`, () => {
-        (inputTemplate as any).parameters = invalidParameter;
-        inputTemplate.conditions = [];
-        expect(() => rcOperation(inputTemplate))
-          .to.throw('Remote Config parameters must be a non-null object');
-      });
+
+  // ROLLBACK tests
+  describe('rollback', () => {
+    it('should propagate API errors', () => {
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .rejects(INTERNAL_ERROR);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .should.eventually.be.rejected.and.deep.equal(INTERNAL_ERROR);
     });
 
-    INVALID_PARAMETER_GROUPS.forEach((invalidParameterGroup) => {
-      it(`should throw if the parameter groups is ${JSON.stringify(invalidParameterGroup)}`, () => {
-        (inputTemplate as any).parameterGroups = invalidParameterGroup;
-        inputTemplate.conditions = [];
-        inputTemplate.parameters = {};
-        expect(() => rcOperation(inputTemplate))
-          .to.throw('Remote Config parameter groups must be a non-null object');
-      });
+    it('should reject when API response is invalid', () => {
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(null);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .should.eventually.be.rejected.and.have.property(
+          'message', 'Invalid Remote Config template: null');
     });
 
-    INVALID_CONDITIONS.forEach((invalidConditions) => {
-      it(`should throw if the conditions is ${JSON.stringify(invalidConditions)}`, () => {
-        (inputTemplate as any).conditions = invalidConditions;
-        inputTemplate.parameters = {};
-        inputTemplate.parameterGroups = {};
-        expect(() => rcOperation(inputTemplate))
-          .to.throw('Remote Config conditions must be an array');
-      });
+    it('should reject when API response does not contain an ETag', () => {
+      const response = deepCopy(REMOTE_CONFIG_RESPONSE);
+      response.etag = '';
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(response);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .should.eventually.be.rejected.and.have.property(
+          'message', `Invalid Remote Config template: ${JSON.stringify(response)}`);
     });
 
-    INVALID_ETAG_TEMPLATES.forEach((invalidEtagTemplate) => {
-      it(`should throw if the template is ${JSON.stringify(invalidEtagTemplate)}`, () => {
-        expect(() => rcOperation(invalidEtagTemplate))
-          .to.throw('ETag must be a non-empty string.');
-      });
+    it('should reject when API response does not contain valid parameters', () => {
+      const response = deepCopy(REMOTE_CONFIG_RESPONSE);
+      response.parameters = null;
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(response);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .should.eventually.be.rejected.and.have.property(
+          'message', `Remote Config parameters must be a non-null object`);
     });
 
-    INVALID_TEMPLATES.forEach((invalidTemplate) => {
-      it(`should throw if the template is ${JSON.stringify(invalidTemplate)}`, () => {
-        expect(() => rcOperation(invalidTemplate))
-          .to.throw(`Invalid Remote Config template: ${JSON.stringify(invalidTemplate)}`);
-      });
+    it('should reject when API response does not contain valid parameter groups', () => {
+      const response = deepCopy(REMOTE_CONFIG_RESPONSE);
+      response.parameterGroups = null;
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(response);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .should.eventually.be.rejected.and.have.property(
+          'message', `Remote Config parameter groups must be a non-null object`);
     });
-  }
+
+    it('should reject when API response does not contain valid conditions', () => {
+      const response = deepCopy(REMOTE_CONFIG_RESPONSE);
+      response.conditions = Object();
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(response);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .should.eventually.be.rejected.and.have.property(
+          'message', `Remote Config conditions must be an array`);
+    });
+
+    it('should resolve with parameters:{} when no parameters present in the response', () => {
+      const response = deepCopy({ conditions: [], parameterGroups: {}, etag: '0-1010-2' });
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(response);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .then((template) => {
+          expect(template.conditions).deep.equals([]);
+          // if parameters are not present in the response, we set it to an empty object.
+          expect(template.parameters).deep.equals({});
+          expect(template.parameterGroups).deep.equals({});
+        });
+    });
+
+    it('should resolve with parameterGroups:{} when no parameter groups present in the response', () => {
+      const response = deepCopy({ conditions: [], parameters: {}, etag: '0-1010-2' });
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(response);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .then((template) => {
+          expect(template.conditions).deep.equals([]);
+          expect(template.parameters).deep.equals({});
+          // if parameter groups are not present in the response, we set it to an empty object.
+          expect(template.parameterGroups).deep.equals({});
+        });
+    });
+
+    it('should resolve with conditions:[] when no conditions present in the response', () => {
+      const response = deepCopy({ parameters: {}, parameterGroups: {}, etag: '0-1010-2' });
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(response);
+      stubs.push(stub);
+      return remoteConfig.rollback('60')
+        .then((template) => {
+          // if conditions are not present in the response, we set it to an empty array.
+          expect(template.conditions).deep.equals([]);
+          expect(template.parameters).deep.equals({});
+          expect(template.parameterGroups).deep.equals({});
+        });
+    });
+
+    it('should resolve with Remote Config template on success', () => {
+      const stub = sinon
+        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .resolves(REMOTE_CONFIG_RESPONSE);
+      stubs.push(stub);
+
+      return remoteConfig.rollback('5')
+        .then((template) => {
+          expect(template.conditions.length).to.equal(1);
+          expect(template.conditions[0].name).to.equal('ios');
+          expect(template.conditions[0].expression).to.equal('device.os == \'ios\'');
+          expect(template.conditions[0].tagColor).to.equal(TagColor.BLUE);
+          expect(template.etag).to.equal('etag-123456789012-5');
+          // verify that etag is read-only
+          expect(() => {
+            (template as any).etag = "new-etag";
+          }).to.throw('Cannot set property etag of #<RemoteConfigTemplateImpl> which has only a getter');
+
+          const key = 'holiday_promo_enabled';
+          const p1 = template.parameters[key];
+          expect(p1.defaultValue).deep.equals({ value: 'true' });
+          expect(p1.conditionalValues).deep.equals({ ios: { useInAppDefault: true } });
+          expect(p1.description).equals('this is a promo');
+
+          expect(template.parameterGroups).deep.equals(PARAMETER_GROUPS);
+
+          const c = template.conditions.find((c) => c.name === 'ios');
+          expect(c).to.be.not.undefined;
+          const cond = c as RemoteConfigCondition;
+          expect(cond.name).to.equal('ios');
+          expect(cond.expression).to.equal('device.os == \'ios\'');
+          expect(cond.tagColor).to.equal(TagColor.BLUE);
+
+          const parsed = JSON.parse(JSON.stringify(template));
+          expect(parsed).deep.equals(REMOTE_CONFIG_RESPONSE);
+        });
+    });
+  });
 });
