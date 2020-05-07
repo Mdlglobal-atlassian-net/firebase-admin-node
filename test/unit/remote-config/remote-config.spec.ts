@@ -624,6 +624,13 @@ describe('RemoteConfig', () => {
     });
   });
 
+  describe('rollback', () => {
+    // tests for api response validations
+    runApiResponseValidationTests(
+      (): Promise<RemoteConfigTemplate> => { return remoteConfig.rollback('5'); },
+      'rollback');
+  });
+
   describe('createTemplateFromJSON', () => {
     const INVALID_STRINGS: any[] = [null, undefined, '', 1, true, {}, []];
     const INVALID_JSON_STRINGS: any[] = ['abc', 'foo', 'a:a', '1:1'];
@@ -714,24 +721,22 @@ describe('RemoteConfig', () => {
     });
   });
 
-
-  // ROLLBACK tests
-  describe('rollback', () => {
+  function runApiResponseValidationTests(rcOperation: () => Promise<RemoteConfigTemplate>, operationName: any): void {
     it('should propagate API errors', () => {
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .rejects(INTERNAL_ERROR);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .should.eventually.be.rejected.and.deep.equal(INTERNAL_ERROR);
     });
 
     it('should reject when API response is invalid', () => {
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(null);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .should.eventually.be.rejected.and.have.property(
           'message', 'Invalid Remote Config template: null');
     });
@@ -740,10 +745,10 @@ describe('RemoteConfig', () => {
       const response = deepCopy(REMOTE_CONFIG_RESPONSE);
       response.etag = '';
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(response);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .should.eventually.be.rejected.and.have.property(
           'message', `Invalid Remote Config template: ${JSON.stringify(response)}`);
     });
@@ -752,10 +757,10 @@ describe('RemoteConfig', () => {
       const response = deepCopy(REMOTE_CONFIG_RESPONSE);
       response.parameters = null;
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(response);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .should.eventually.be.rejected.and.have.property(
           'message', `Remote Config parameters must be a non-null object`);
     });
@@ -764,10 +769,10 @@ describe('RemoteConfig', () => {
       const response = deepCopy(REMOTE_CONFIG_RESPONSE);
       response.parameterGroups = null;
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(response);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .should.eventually.be.rejected.and.have.property(
           'message', `Remote Config parameter groups must be a non-null object`);
     });
@@ -776,10 +781,10 @@ describe('RemoteConfig', () => {
       const response = deepCopy(REMOTE_CONFIG_RESPONSE);
       response.conditions = Object();
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(response);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .should.eventually.be.rejected.and.have.property(
           'message', `Remote Config conditions must be an array`);
     });
@@ -787,10 +792,10 @@ describe('RemoteConfig', () => {
     it('should resolve with parameters:{} when no parameters present in the response', () => {
       const response = deepCopy({ conditions: [], parameterGroups: {}, etag: '0-1010-2' });
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(response);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .then((template) => {
           expect(template.conditions).deep.equals([]);
           // if parameters are not present in the response, we set it to an empty object.
@@ -802,10 +807,10 @@ describe('RemoteConfig', () => {
     it('should resolve with parameterGroups:{} when no parameter groups present in the response', () => {
       const response = deepCopy({ conditions: [], parameters: {}, etag: '0-1010-2' });
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(response);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .then((template) => {
           expect(template.conditions).deep.equals([]);
           expect(template.parameters).deep.equals({});
@@ -817,10 +822,10 @@ describe('RemoteConfig', () => {
     it('should resolve with conditions:[] when no conditions present in the response', () => {
       const response = deepCopy({ parameters: {}, parameterGroups: {}, etag: '0-1010-2' });
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(response);
       stubs.push(stub);
-      return remoteConfig.rollback('60')
+      return rcOperation()
         .then((template) => {
           // if conditions are not present in the response, we set it to an empty array.
           expect(template.conditions).deep.equals([]);
@@ -831,11 +836,11 @@ describe('RemoteConfig', () => {
 
     it('should resolve with Remote Config template on success', () => {
       const stub = sinon
-        .stub(RemoteConfigApiClient.prototype, 'rollback')
+        .stub(RemoteConfigApiClient.prototype, operationName)
         .resolves(REMOTE_CONFIG_RESPONSE);
       stubs.push(stub);
 
-      return remoteConfig.rollback('5')
+      return rcOperation()
         .then((template) => {
           expect(template.conditions.length).to.equal(1);
           expect(template.conditions[0].name).to.equal('ios');
@@ -866,5 +871,5 @@ describe('RemoteConfig', () => {
           expect(parsed).deep.equals(REMOTE_CONFIG_RESPONSE);
         });
     });
-  });
+  }
 });
